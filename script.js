@@ -1,9 +1,9 @@
-// script.js – v14 NASDAQ HIGH-IMPACT SCALPING – Check toutes les 2 min, seuil 2+ news (17 nov 2025)
+// script.js – v15 NASDAQ HIGH-IMPACT SCALPING – Anti-CORS + Fallback (17 nov 2025)
 const newsContainer = document.getElementById("news");
 const circle = document.getElementById("sentiment-circle");
 const sentimentText = document.getElementById("sentiment-text");
-const STORAGE_KEY = "nasdaq_impact_v14";
-const DAY_KEY = "lastDay_v14";
+const STORAGE_KEY = "nasdaq_impact_v15";
+const DAY_KEY = "lastDay_v15";
 
 // Reset minuit auto
 const today = new Date().toLocaleDateString("fr-FR");
@@ -15,16 +15,15 @@ if (localStorage.getItem(DAY_KEY) !== today) {
 let rollingScore = 0;
 let lastCheck = -1;
 
-// Sources élargies pour plus de hits (Nasdaq/tech)
+// Sources élargies, stables
 const sources = [
     "https://www.investing.com/rss/news_25.rss",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "https://www.reuters.com/pf/resources/rss/markets.xml",
-    "https://www.nasdaq.com/feed/rss?n=80",
-    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=ndx&region=US&lang=en-US"  // + Yahoo pour scalping
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=ndx&region=US&lang=en-US",
+    "https://feeds.bloomberg.com/markets/news.rss"  // + Bloomberg, stable
 ];
 
-// Keywords seuil 3+ (Nasdaq focus, inchangés)
+// Keywords / Filtre inchangés
 const keywords = {
     "-10": [/nasdaq.?crash|tech.?plunge|circuit.?breaker/i],
     "-8": [/nasdaq.?recession|earnings.?miss.?nvidia|ai.?bubble.?burst/i],
@@ -35,15 +34,17 @@ const keywords = {
     "+6": [/nasdaq.?rebound|earnings.?beat.?tech|soft.?landing.?tech/i],
     "+4": [/nasdaq.?rally|risk.?on.?tech|vix.?crush/i]
 };
-
-// Filtre STRICT Nasdaq/tech
 const impactFilter = /nasdaq|ndx|tech|ai|nvidia|earnings.?tech|breaking.?nasdaq/i;
 
 async function fetchRSS(url) {
+    const proxy = 'https://cors-anywhere.herokuapp.com/';  // Nouveau proxy anti-CORS
     try {
-        const r = await fetch("https://api.allorigins.win/get?url=" + encodeURIComponent(url));
-        const d = await r.json();
-        const xml = new DOMParser().parseFromString(d.contents, "text/xml");
+        const r = await fetch(proxy + url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+        const d = await r.text();  // Direct text pour XML fragile
+        const xml = new DOMParser().parseFromString(d, "text/xml");
+        const parserError = xml.querySelector("parsererror");
+        if (parserError) throw new Error("XML parse error: " + parserError.textContent);
         return Array.from(xml.querySelectorAll("item")).map(item => {
             let title = (item.querySelector("title")?.textContent || "").trim();
             let desc = (item.querySelector("description")?.textContent || "").replace(/<[^>]+>/g, " ").trim();
@@ -59,43 +60,49 @@ async function fetchRSS(url) {
             return impactFilter.test(text) && !isNaN(new Date(i.date).getTime());
         });
     } catch (e) {
-        console.error(`RSS fail ${url}:`, e);
+        console.error(`RSS fail ${url}:`, e.message);
         return [];
     }
 }
 
 async function run() {
     const now = new Date();
-    // Scalping : Check toutes les 2 min (block de 2 min)
     const currentMin = now.getMinutes();
-    const currentBlock = Math.floor(currentMin / 2) * 2 + now.getHours() * 60;  // Block 2-min
+    const currentBlock = Math.floor(currentMin / 2) * 2 + now.getHours() * 60;
     if (currentBlock === lastCheck) return;
     lastCheck = currentBlock;
     console.log(`🕐 Scalp check à ${now.toLocaleTimeString("fr-FR")} – Block ${currentBlock}`);
 
-    let raw = 0, highImpactItems = [];
+    let raw = 0, highImpactItems = [], totalFetched = 0;
     for (const url of sources) {
         const items = await fetchRSS(url);
+        totalFetched += items.length;
         console.log(`${url}: ${items.length} items filtrés`);
-        for (const i of items.slice(0, 10)) {  // 10/source pour plus de data
+        for (const i of items.slice(0, 10)) {
             const text = (i.title + " " + i.desc).toLowerCase();
             let score = 0;
             for (const [w, regs] of Object.entries(keywords)) {
                 for (const r of regs) if (r.test(text)) score += parseInt(w);
             }
-            if (Math.abs(score) < 3) continue;  // 3+ étoiles
+            if (Math.abs(score) < 3) continue;
             if (/breaking|high.?impact|urgent|nasdaq/i.test(text)) score *= 1.5;
             const ageMin = (now - new Date(i.date)) / 60000;
-            if (ageMin > 1440) continue;  // <24h
+            if (ageMin > 1440) continue;
             const decay = ageMin < 60 ? 1 : 0.7;
             raw += score * decay;
             highImpactItems.push({title: i.title, score: score * decay, date: i.date});
         }
     }
 
-    rollingScore = rollingScore === 0 ? raw : rollingScore * 0.7 + raw * 0.3;  // Plus dynamique pour scalp
+    // Fallback si <2 items : Log alerte (tu peux ajouter un fetch manuel ici)
+    if (totalFetched < 2) {
+        console.warn("⚠️ Fallback needed: Low fetch, check proxy/CORS extension");
+        // Option : Ajoute un fetch vers une API gratuite comme NewsAPI (clé requise)
+    }
 
-    // Stockage <24h
+    rollingScore = rollingScore === 0 ? raw : rollingScore * 0.7 + raw * 0.3;
+
+    // Stockage / UI inchangés (comme v14)
     let stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     highImpactItems.forEach(n => {
         if (!stored.some(s => s.title === n.title && (now - new Date(s.date)) < 86400000)) {
@@ -106,18 +113,16 @@ async function run() {
     stored.sort((a, b) => new Date(b.date) - new Date(a.date));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stored.slice(0, 50)));
 
-    // UI
     newsContainer.innerHTML = stored.slice(0, 10).map(n => {
         const t = new Date(n.date).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
         const e = n.score <= -6 ? "🔴" : n.score <= -3 ? "🟠" : n.score >= 6 ? "🟢" : n.score >= 3 ? "🟡" : "⚪";
         return `<div class="news-item"><span>${e}</span><b>[${t}]</b> ${n.title}</div>`;
-    }).join("") || "<div style='text-align:center;color:#aaa'>Pas de news high-impact Nasdaq (≥3 étoiles) – Calme pour scalp</div>";
+    }).join("") || "<div style='text-align:center;color:#aaa'>Pas de news high-impact Nasdaq (≥3 étoiles) – Vérifie CORS</div>";
 
-    // Décision scalp : Couleur si ≥2 news
     const todayCount = stored.length;
-    console.log(`Items today: ${todayCount} | Rolling: ${Math.round(rollingScore)}`);
+    console.log(`Items today: ${todayCount} | Rolling: ${Math.round(rollingScore)} | Total fetched: ${totalFetched}`);
     if (todayCount < 2) {
-        set("neutral", `NEUTRE – Seulement ${todayCount} news ≥3 étoiles, pas de signal scalp`);
+        set("neutral", `NEUTRE – Seulement ${todayCount} news ≥3 étoiles (fetch low: ${totalFetched}), active CORS proxy`);
     } else if (rollingScore >= 6) {
         set("green", "VERT – Haussier net (≥2 news high-impact, scalp long NDX)");
     } else if (rollingScore <= -6) {
@@ -133,4 +138,4 @@ async function run() {
 }
 
 run();
-setInterval(run, 120000);  // Toutes les 2 min (120s)
+setInterval(run, 120000);  // 2 min
