@@ -26,7 +26,7 @@ function dailyResetCheck() {
 
 dailyResetCheck();
 
-// === Format heure (heure FR locale à partir du timestamp du bot) ===
+// === Format heure (heure FR locale à partir du timestamp) ===
 function formatTimeFromTs(ts) {
     if (!ts) return "--:--";
     const d = new Date(ts);
@@ -37,27 +37,16 @@ function formatTimeFromTs(ts) {
     });
 }
 
-// === SOURCES ===
-const primarySources = [
-    "https://feeds.feedburner.com/zerohedge",
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+// === SOURCES RSS (on garde un set raisonnable) ===
+const sources = [
     "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
     "https://www.reuters.com/pf/resources/rss/markets.xml",
-    "https://seekingalpha.com/api/v3/news/rss?limit=30",
-    "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNR4n1CU9MVWlnU0FtcGhHZ0pMVW1"
-];
-
-const secondarySources = [
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://www.fxstreet.com/rss/news",
     "https://www.investing.com/rss/news_25.rss",
     "https://www.investing.com/rss/news_285.rss",
-    "https://www.fxstreet.com/rss/news",
-    "https://www.kitco.com/rss/economic_calendar.rss",
-    "https://www.kitco.com/rss/news.rss"
-];
-
-const backupSources = [
-    "https://news.google.com/rss/search?q=nasdaq&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=stock+market&hl=en-US&gl=US&ceid=US:en"
+    "https://news.google.com/rss/search?q=stock+market&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=nasdaq&hl=en-US&gl=US&ceid=US:en"
 ];
 
 // === Mots-clés ===
@@ -75,53 +64,43 @@ const keywords = {
     "+5": [/melt-?up/i, /euphoria/i, /fomo/i, /vix.?termination/i]
 };
 
-// === Filtre strict ===
+// === Filtre marché strict ===
 const marketFilter =
 /stock|market|dow|nasdaq|s&p|spx|sp500|fed|rate|inflation|yield|treasury|vix|volatility|earnings|cpi|ppi|fomc|powell|bond|10-?year/i;
 
-// === PROXY ===
-async function fetchWithProxy(url) {
-    const proxies = [
-        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        `https://cors.isomorphic-git.org/${url}`
-    ];
+// === RSS → JSON via API rss2json (CORS OK) ===
+async function fetchRSS(url) {
+    const apiUrl = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(url);
 
-    for (let proxy of proxies) {
-        try {
-            const res = await fetch(proxy, { cache: "no-store" });
-            if (!res.ok) continue;
-
-            const data = await res.json();
-            if (data.contents && data.contents.length > 50) return data.contents;
-        } catch {}
+    try {
+        const res = await fetch(apiUrl, { cache: "no-store" });
+        if (!res.ok) {
+            console.warn("❌ RSS fail:", url, res.status);
+            return [];
+        }
+        const data = await res.json();
+        if (!data.items || !Array.isArray(data.items)) return [];
+        return data.items;
+    } catch (e) {
+        console.warn("❌ RSS exception:", url, e);
+        return [];
     }
-    return null;
 }
 
 // === FETCH NEWS ===
 let rollingScore = 0;
 
 async function fetchNews() {
-    const allSources = [...primarySources, ...secondarySources, ...backupSources];
-
     let newEntries = [];
     let rawScore = 0;
 
-    for (const url of allSources) {
-        const xmlText = await fetchWithProxy(url);
-        if (!xmlText) continue;
+    for (const url of sources) {
+        const items = await fetchRSS(url);
+        if (!items.length) continue;
 
-        let xml;
-        try {
-            xml = new DOMParser().parseFromString(xmlText, "text/xml");
-        } catch {
-            continue;
-        }
-
-        const items = xml.querySelectorAll("item");
         for (const item of items) {
-            const title = item.querySelector("title")?.textContent || "";
-            const desc  = item.querySelector("description")?.textContent || "";
+            const title = item.title || "";
+            const desc  = item.description || "";
             const full  = (title + " " + desc).toLowerCase();
 
             if (!marketFilter.test(full)) continue;
@@ -139,10 +118,12 @@ async function fetchNews() {
 
             rawScore += score;
 
+            const pubTs = item.pubDate ? Date.parse(item.pubDate) : Date.now();
+
             newEntries.push({
                 title,
                 score,
-                timestamp: Date.now()
+                timestamp: isNaN(pubTs) ? Date.now() : pubTs
             });
         }
     }
@@ -191,7 +172,7 @@ function updateUI(fetchedNews, score) {
 
     newsContainer.innerHTML = html;
 
-    // Sentiment global
+    // Sentiment global (VXX playbook)
     if (score <= -12) setSentiment("extreme-red", "VXX LONG AGRESSIF — SIZE GROS");
     else if (score <= -6) setSentiment("red", "VXX LONG — Risk-Off clair");
     else if (score >= 12) setSentiment("extreme-green", "SHORT VXX AGRESSIF — Melt-up");
@@ -207,4 +188,4 @@ function setSentiment(color, message) {
 
 // === Lancement ===
 fetchNews();
-setInterval(fetchNews, 25000);
+setInterval(fetchNews, 60000); // 60s pour éviter de spam l'API
