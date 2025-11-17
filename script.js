@@ -3,7 +3,6 @@ const newsContainer = document.getElementById("news");
 const circle = document.getElementById("sentiment-circle");
 const sentimentText = document.getElementById("sentiment-text");
 
-
 // === GESTION HISTORIQUE + RESET MINUIT ===
 function loadStoredNews() {
     const raw = localStorage.getItem("sentimentNews");
@@ -19,7 +18,6 @@ function dailyResetCheck() {
     const today = new Date().toLocaleDateString("fr-FR");
 
     if (last !== today) {
-        // Reset complet
         localStorage.setItem("sentimentNews", JSON.stringify([]));
         localStorage.setItem("lastResetDate", today);
         console.log("🕛 Reset automatique (nouveau jour)");
@@ -28,10 +26,20 @@ function dailyResetCheck() {
 
 dailyResetCheck();
 
+// === Format heure (heure FR locale à partir du timestamp du bot) ===
+function formatTimeFromTs(ts) {
+    if (!ts) return "--:--";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return "--:--";
+    return d.toLocaleTimeString("fr-FR", {
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
 
 // === SOURCES ===
 const primarySources = [
-    "https://feeds.feedburner.com/zerohedge",                        
+    "https://feeds.feedburner.com/zerohedge",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
     "https://www.reuters.com/pf/resources/rss/markets.xml",
@@ -52,7 +60,6 @@ const backupSources = [
     "https://news.google.com/rss/search?q=stock+market&hl=en-US&gl=US&ceid=US:en"
 ];
 
-
 // === Mots-clés ===
 const keywords = {
     "-6": [/vix.?spike/i, /contagion/i, /circuit.?breaker/i, /margin.?call/i],
@@ -68,24 +75,9 @@ const keywords = {
     "+5": [/melt-?up/i, /euphoria/i, /fomo/i, /vix.?termination/i]
 };
 
-
 // === Filtre strict ===
-const marketFilter = /stock|market|dow|nasdaq|s&p|spx|fed|rate|inflation|yield|treasury|vix|volatility|earnings|cpi|ppi|fomc|powell|bond|10-?year/i;
-
-
-// === Traduction auto (API Libre Français) ===
-// GRATUIT + illimité via MyMemory
-async function translateToFrench(text) {
-    try {
-        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=en|fr";
-        const r = await fetch(url);
-        const j = await r.json();
-        return j.responseData.translatedText || text;
-    } catch {
-        return text;
-    }
-}
-
+const marketFilter =
+/stock|market|dow|nasdaq|s&p|spx|sp500|fed|rate|inflation|yield|treasury|vix|volatility|earnings|cpi|ppi|fomc|powell|bond|10-?year/i;
 
 // === PROXY ===
 async function fetchWithProxy(url) {
@@ -100,13 +92,11 @@ async function fetchWithProxy(url) {
             if (!res.ok) continue;
 
             const data = await res.json();
-            if (data.contents) return data.contents;
-
+            if (data.contents && data.contents.length > 50) return data.contents;
         } catch {}
     }
     return null;
 }
-
 
 // === FETCH NEWS ===
 let rollingScore = 0;
@@ -121,14 +111,18 @@ async function fetchNews() {
         const xmlText = await fetchWithProxy(url);
         if (!xmlText) continue;
 
-        const xml = new DOMParser().parseFromString(xmlText, "text/xml");
-        const items = xml.querySelectorAll("item");
+        let xml;
+        try {
+            xml = new DOMParser().parseFromString(xmlText, "text/xml");
+        } catch {
+            continue;
+        }
 
+        const items = xml.querySelectorAll("item");
         for (const item of items) {
             const title = item.querySelector("title")?.textContent || "";
-            const desc = item.querySelector("description")?.textContent || "";
-            const pub = item.querySelector("pubDate")?.textContent || "";
-            const full = (title + " " + desc).toLowerCase();
+            const desc  = item.querySelector("description")?.textContent || "";
+            const full  = (title + " " + desc).toLowerCase();
 
             if (!marketFilter.test(full)) continue;
 
@@ -148,7 +142,6 @@ async function fetchNews() {
             newEntries.push({
                 title,
                 score,
-                pubDate: pub,
                 timestamp: Date.now()
             });
         }
@@ -161,14 +154,15 @@ async function fetchNews() {
     updateUI(newEntries, rollingScore);
 }
 
-
 // === UI ===
-async function updateUI(fetchedNews, score) {
+function updateUI(fetchedNews, score) {
     let stored = loadStoredNews();
 
-    // Ajout sans doublons
+    // Ajout sans doublons (par titre)
     for (const n of fetchedNews) {
-        if (!stored.find(s => s.title === n.title)) stored.push(n);
+        if (!stored.find(s => s.title === n.title)) {
+            stored.push(n);
+        }
     }
 
     saveStoredNews(stored);
@@ -176,31 +170,28 @@ async function updateUI(fetchedNews, score) {
     // Tri par heure (récent → ancien)
     stored.sort((a, b) => b.timestamp - a.timestamp);
 
-    // Génération HTML avec traduction + heure
-    const html = await Promise.all(
-        stored.slice(0, 40).map(async n => {
-            const translated = await translateToFrench(n.title);
-            const time = n.pubDate ? new Date(n.pubDate).toLocaleTimeString("fr-FR") : "⏱️ ?";
+    // On garde jusqu'à 150 news dans l'affichage
+    const html = stored.slice(0, 150).map(n => {
+        const timeStr = formatTimeFromTs(n.timestamp);
 
-            const color =
-                n.score <= -3 ? "🔴" :
-                n.score <= -1 ? "🟠" :
-                n.score >= 3 ? "🟢" :
-                n.score >= 1 ? "🟡" : "⚪";
+        const colorEmoji =
+            n.score <= -3 ? "🔴" :
+            n.score <= -1 ? "🟠" :
+            n.score >= 3  ? "🟢" :
+            n.score >= 1  ? "🟡" :
+                            "⚪";
 
-            return `
-                <div class="news-item">
-                    <span>${color}</span>
-                    <b>[${time}]</b> ${n.title}
-                    <div class="translation">🇫🇷 ${translated}</div>
-                </div>
-            `;
-        })
-    );
+        return `
+            <div class="news-item">
+                <span>${colorEmoji}</span>
+                <b>[${timeStr}]</b> ${n.title}
+            </div>
+        `;
+    }).join("");
 
-    newsContainer.innerHTML = html.join("");
+    newsContainer.innerHTML = html;
 
-    // Sentiment
+    // Sentiment global
     if (score <= -12) setSentiment("extreme-red", "VXX LONG AGRESSIF — SIZE GROS");
     else if (score <= -6) setSentiment("red", "VXX LONG — Risk-Off clair");
     else if (score >= 12) setSentiment("extreme-green", "SHORT VXX AGRESSIF — Melt-up");
@@ -213,7 +204,6 @@ function setSentiment(color, message) {
     sentimentText.textContent = message;
     sentimentText.className = `sentiment-${color.split("-")[0]}`;
 }
-
 
 // === Lancement ===
 fetchNews();
