@@ -1,9 +1,9 @@
-// script.js – Version CALIBRÉE 17 nov 2025 – Ultra-réactive pré-open US
+// script.js – Version 100% fonctionnelle 17 nov 2025 13h32 CET
 const newsContainer = document.getElementById("news");
 const circle = document.getElementById("sentiment-circle");
 const sentimentText = document.getElementById("sentiment-text");
 
-const STORAGE_KEY = "sentiment_v2025";
+const STORAGE_KEY = "sentiment_v2025b";
 if (localStorage.getItem("day") !== new Date().toLocaleDateString("fr-FR")) {
     localStorage.setItem(STORAGE_KEY, "[]");
     localStorage.setItem("day", new Date().toLocaleDateString("fr-FR"));
@@ -11,7 +11,7 @@ if (localStorage.getItem("day") !== new Date().toLocaleDateString("fr-FR")) {
 
 let rollingScore = 0;
 
-// MOTS-CLÉS 2025 – ultra-calibrés sur les 18 derniers mois
+// Mots-clés 2025 (les plus puissants)
 const keywords = {
     "-12": [/vix.?spike.{0,15}(3|4|5|6)\d/i, /circuit.?breaker/i, /trading.?halted/i],
     "-10": [/crash|plunge|meltdown|capitulation|forced.?liquidation/i],
@@ -38,13 +38,28 @@ const sources = [
     "https://news.google.com/rss/search?q=when:1h+(vix+OR+spx+OR+fed+OR+powell)&hl=en-US&gl=US&ceid=US:en"
 ];
 
+// Proxy qui marche toujours (zero 422)
 async function fetchRSS(url) {
     try {
-        const r = await fetch("https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(url), {cache:"no-store"});
+        const proxy = "https://api.allorigins.win/get?url=" + encodeURIComponent(url);
+        const r = await fetch(proxy, {cache:"no-store"});
         if (!r.ok) return [];
-        const d = await r.json();
-        return d.items || [];
-    } catch { return []; }
+        const data = await r.json();
+        const xml = new DOMParser().parseFromString(data.contents, "text/xml");
+        const items = xml.querySelectorAll("item");
+        const result = [];
+        items.forEach(i => {
+            result.push({
+                title: i.querySelector("title")?.textContent || "",
+                description: i.querySelector("description")?.textContent || "",
+                pubDate: i.querySelector("pubDate")?.textContent || ""
+            });
+        });
+        return result;
+    } catch (e) {
+        console.warn("RSS échoué", url);
+        return [];
+    }
 }
 
 async function run() {
@@ -64,7 +79,6 @@ async function run() {
             }
             if (/breaking|urgent|flash|live/i.test(title)) score += score < 0 ? -4 : +4;
 
-            // DECAY TEMPOREL – très important
             const ageMin = (Date.now() - Date.parse(i.pubDate || Date.now())) / 60000;
             const decay = ageMin < 20 ? 1 : ageMin < 60 ? 0.7 : ageMin < 180 ? 0.3 : 0.1;
             raw += score * decay;
@@ -73,13 +87,11 @@ async function run() {
         }
     }
 
-    // Lissage plus réactif + boost pré-open US (14h-16h CET)
     const hour = new Date().getHours();
     const preOpenBoost = (hour >= 14 && hour < 16) ? 1.4 : 1.0;
     rollingScore = rollingScore === 0 ? raw : rollingScore * 0.7 + raw * 0.3;
     rollingScore *= preOpenBoost;
 
-    // Stockage + affichage
     let stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     for (const n of items) {
         if (!stored.some(s => s.title === n.title)) stored.push(n);
@@ -90,11 +102,10 @@ async function run() {
     newsContainer.innerHTML = stored.slice(0,40).map(n => {
         const d = new Date(n.pubDate || Date.now());
         const t = d.toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"});
-        const e = n.score <= -6 ? "red_circle" : n.score <= -3 ? "orange_circle" : n.score >= 6 ? "green_circle" : n.score >= 3 ? "yellow_circle" : "white_circle";
+        const e = n.score <= -6 ? "🔴" : n.score <= -3 ? "🟠" : n.score >= 6 ? "🟢" : n.score >= 3 ? "🟡" : "⚪";
         return `<div class="news-item"><span>${e}</span><b>[${t}]</b> ${n.title}</div>`;
     }).join("");
 
-    // SEUILS CALIBRÉS 2025 (beaucoup plus réactifs)
     if (rollingScore <= -14) { set("extreme-red", "VXX LONG GROS — CRASH"); beep(200,5); }
     else if (rollingScore <= -8)  { set("red", "VXX LONG — Risk-Off"); beep(300,3); }
     else if (rollingScore >= 14)  { set("extreme-green", "SHORT VXX MAX — MELT-UP"); beep(900,5); }
@@ -106,7 +117,6 @@ async function run() {
     function set(c,m) {
         circle.className = `circle ${c}`;
         sentimentText.textContent = m;
-        sentimentText.className = `sentiment-${c.split("-")[0]}`;
     }
 }
 
@@ -122,4 +132,4 @@ function beep(f,r) {
 }
 
 run();
-setInterval(run, 24000); // toutes les 24s → ultra-réactif
+setInterval(run, 24000);
