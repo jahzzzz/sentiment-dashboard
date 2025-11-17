@@ -1,9 +1,9 @@
-// script.js – v13 NASDAQ HIGH-IMPACT – Couleur SEULEMENT si ≥3 news 3+ étoiles (17 nov 2025)
+// script.js – v14 NASDAQ HIGH-IMPACT SCALPING – Check toutes les 2 min, seuil 2+ news (17 nov 2025)
 const newsContainer = document.getElementById("news");
 const circle = document.getElementById("sentiment-circle");
 const sentimentText = document.getElementById("sentiment-text");
-const STORAGE_KEY = "nasdaq_impact_v13";
-const DAY_KEY = "lastDay_v13";
+const STORAGE_KEY = "nasdaq_impact_v14";
+const DAY_KEY = "lastDay_v14";
 
 // Reset minuit auto
 const today = new Date().toLocaleDateString("fr-FR");
@@ -13,17 +13,18 @@ if (localStorage.getItem(DAY_KEY) !== today) {
     console.log("🕛 Reset minuit – Nouvelle journée");
 }
 let rollingScore = 0;
-let lastHour = -1;
+let lastCheck = -1;
 
-// Sources Nasdaq/tech high-impact
+// Sources élargies pour plus de hits (Nasdaq/tech)
 const sources = [
     "https://www.investing.com/rss/news_25.rss",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://www.reuters.com/pf/resources/rss/markets.xml",
-    "https://www.nasdaq.com/feed/rss?n=80"
+    "https://www.nasdaq.com/feed/rss?n=80",
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=ndx&region=US&lang=en-US"  // + Yahoo pour scalping
 ];
 
-// Keywords seuil 3+ (Nasdaq focus)
+// Keywords seuil 3+ (Nasdaq focus, inchangés)
 const keywords = {
     "-10": [/nasdaq.?crash|tech.?plunge|circuit.?breaker/i],
     "-8": [/nasdaq.?recession|earnings.?miss.?nvidia|ai.?bubble.?burst/i],
@@ -65,59 +66,64 @@ async function fetchRSS(url) {
 
 async function run() {
     const now = new Date();
-    const currentHour = now.getHours();
-    if (currentHour === lastHour) return;
-    lastHour = currentHour;
+    // Scalping : Check toutes les 2 min (block de 2 min)
+    const currentMin = now.getMinutes();
+    const currentBlock = Math.floor(currentMin / 2) * 2 + now.getHours() * 60;  // Block 2-min
+    if (currentBlock === lastCheck) return;
+    lastCheck = currentBlock;
+    console.log(`🕐 Scalp check à ${now.toLocaleTimeString("fr-FR")} – Block ${currentBlock}`);
 
     let raw = 0, highImpactItems = [];
     for (const url of sources) {
         const items = await fetchRSS(url);
-        for (const i of items.slice(0, 8)) { // 8/source max
+        console.log(`${url}: ${items.length} items filtrés`);
+        for (const i of items.slice(0, 10)) {  // 10/source pour plus de data
             const text = (i.title + " " + i.desc).toLowerCase();
             let score = 0;
             for (const [w, regs] of Object.entries(keywords)) {
                 for (const r of regs) if (r.test(text)) score += parseInt(w);
             }
-            if (Math.abs(score) < 3) continue; // Seuils 3+ étoiles seulement
-            if (/breaking|high.?impact|urgent|nasdaq/i.test(text)) score *= 1.5; // Boost
+            if (Math.abs(score) < 3) continue;  // 3+ étoiles
+            if (/breaking|high.?impact|urgent|nasdaq/i.test(text)) score *= 1.5;
             const ageMin = (now - new Date(i.date)) / 60000;
-            if (ageMin > 1440) continue; // <24h
+            if (ageMin > 1440) continue;  // <24h
             const decay = ageMin < 60 ? 1 : 0.7;
             raw += score * decay;
             highImpactItems.push({title: i.title, score: score * decay, date: i.date});
         }
     }
 
-    rollingScore = rollingScore === 0 ? raw : rollingScore * 0.9 + raw * 0.1;
+    rollingScore = rollingScore === 0 ? raw : rollingScore * 0.7 + raw * 0.3;  // Plus dynamique pour scalp
 
-    // Stockage historique (pour compter ≥3/jour)
+    // Stockage <24h
     let stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     highImpactItems.forEach(n => {
-        if (!stored.some(s => s.title === n.title && (now - new Date(s.date)) < 86400000)) { // <24h
+        if (!stored.some(s => s.title === n.title && (now - new Date(s.date)) < 86400000)) {
             stored.push(n);
         }
     });
-    stored = stored.filter(s => (now - new Date(s.date)) < 86400000); // Garde <24h
+    stored = stored.filter(s => (now - new Date(s.date)) < 86400000);
     stored.sort((a, b) => new Date(b.date) - new Date(a.date));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stored.slice(0, 50)));
 
-    // UI : Top 10 high-impact
+    // UI
     newsContainer.innerHTML = stored.slice(0, 10).map(n => {
         const t = new Date(n.date).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
         const e = n.score <= -6 ? "🔴" : n.score <= -3 ? "🟠" : n.score >= 6 ? "🟢" : n.score >= 3 ? "🟡" : "⚪";
         return `<div class="news-item"><span>${e}</span><b>[${t}]</b> ${n.title}</div>`;
-    }).join("") || "<div style='text-align:center;color:#aaa'>Pas de news high-impact Nasdaq (≥3 étoiles) aujourd'hui</div>";
+    }).join("") || "<div style='text-align:center;color:#aaa'>Pas de news high-impact Nasdaq (≥3 étoiles) – Calme pour scalp</div>";
 
-    // Décision : Couleur SEULEMENT si ≥3 news qualifiantes aujourd'hui
+    // Décision scalp : Couleur si ≥2 news
     const todayCount = stored.length;
-    if (todayCount < 3) {
-        set("neutral", `NEUTRE – Seulement ${todayCount} news ≥3 étoiles, pas assez pour signal`);
+    console.log(`Items today: ${todayCount} | Rolling: ${Math.round(rollingScore)}`);
+    if (todayCount < 2) {
+        set("neutral", `NEUTRE – Seulement ${todayCount} news ≥3 étoiles, pas de signal scalp`);
     } else if (rollingScore >= 6) {
-        set("green", "VERT – Haussier net sur ≥3 news high-impact");
+        set("green", "VERT – Haussier net (≥2 news high-impact, scalp long NDX)");
     } else if (rollingScore <= -6) {
-        set("red", "ROUGE – Baissier net sur ≥3 news high-impact");
+        set("red", "ROUGE – Baissier net (≥2 news high-impact, scalp short ou out)");
     } else {
-        set("neutral", `NEUTRE – ≥3 news mais signal équilibré (${Math.round(rollingScore)})`);
+        set("neutral", `NEUTRE – ≥2 news mais équilibré (${Math.round(rollingScore)})`);
     }
 
     function set(c, m) {
@@ -127,4 +133,4 @@ async function run() {
 }
 
 run();
-setInterval(run, 60000); // 1 min, check hourly
+setInterval(run, 120000);  // Toutes les 2 min (120s)
