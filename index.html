@@ -5,7 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sentiment Dashboard</title>
     <link rel="stylesheet" href="style.css" />
+
+    <style>
+        /* --- Style des news avec heure + traduction --- */
+        .news-item {
+            padding: 10px 14px;
+            margin-bottom: 12px;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 10px;
+            box-shadow: 0 0 6px rgba(0,0,0,0.2);
+            color: white;
+            font-size: 16px;
+            line-height: 1.4;
+        }
+
+        .news-item span {
+            margin-right: 6px;
+            font-size: 18px;
+        }
+
+        .news-item b {
+            color: #ccc;
+            margin-right: 8px;
+            font-weight: 600;
+        }
+
+        .translation {
+            margin-top: 4px;
+            padding-left: 28px;
+            font-size: 14px;
+            opacity: 0.85;
+            color: #dcdcdc;
+        }
+    </style>
 </head>
+
 <body>
 
     <h1>📉 Sentiment Market (Live)</h1>
