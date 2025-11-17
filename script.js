@@ -1,198 +1,125 @@
-// === DOM ===
+// script.js – Version CALIBRÉE 17 nov 2025 – Ultra-réactive pré-open US
 const newsContainer = document.getElementById("news");
 const circle = document.getElementById("sentiment-circle");
 const sentimentText = document.getElementById("sentiment-text");
 
-// === STORAGE KEYS (version 2 pour éviter les vieilles données) ===
-const STORAGE_KEY = "sentimentNews_v2";
-const RESET_KEY = "lastResetDate_v2";
-
-// === GESTION HISTORIQUE + RESET MINUIT ===
-function loadStoredNews() {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+const STORAGE_KEY = "sentiment_v2025";
+if (localStorage.getItem("day") !== new Date().toLocaleDateString("fr-FR")) {
+    localStorage.setItem(STORAGE_KEY, "[]");
+    localStorage.setItem("day", new Date().toLocaleDateString("fr-FR"));
 }
 
-function saveStoredNews(arr) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
-}
+let rollingScore = 0;
 
-function dailyResetCheck() {
-    const last = localStorage.getItem(RESET_KEY);
-    const today = new Date().toLocaleDateString("fr-FR");
+// MOTS-CLÉS 2025 – ultra-calibrés sur les 18 derniers mois
+const keywords = {
+    "-12": [/vix.?spike.{0,15}(3|4|5|6)\d/i, /circuit.?breaker/i, /trading.?halted/i],
+    "-10": [/crash|plunge|meltdown|capitulation|forced.?liquidation/i],
+    "-8":  [/bank.?run|default|systemic|contagion/i],
+    "-6":  [/hard.?landing|recession.?confirmed|shutdown/i],
+    "-5":  [/war|missile|nuke|escalation|hawkish.?surprise|hike.?75|hike.?100/i],
+    "+10": [/emergency.?cut|rate.?cut.?(75|100)/i],
+    "+8":  [/qe.?restart|stimulus.?package/i],
+    "+7":  [/melt.?up|euphoria|fomo|parabolic/i],
+    "+4":  [/dovish.?surprise|fed.?pivot|rate.?cut.?50/i],
+    "-3":  [/hot.?cpi|sticky.?inflation|powell.?hawk/i],
+    "+3":  [/cool.?cpi|disinflation|soft.?landing/i],
+    "-2":  [/risk.?off|safe.?haven/i],
+    "+2":  [/risk.?on|vix.?crush|rally/i]
+};
 
-    if (last !== today) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
-        localStorage.setItem(RESET_KEY, today);
-        console.log("🕛 Reset automatique (nouveau jour)");
-    }
-}
+const marketFilter = /stock|dow|nasdaq|s&p|spx|fed|rate|cpi|ppi|powell|vix|volatility|yield|treasury|fomc|earnings/i;
 
-dailyResetCheck();
-
-// === SOURCES RSS ===
-const primarySources = [
+const sources = [
     "https://feeds.feedburner.com/zerohedge",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-    "https://www.reuters.com/pf/resources/rss/markets.xml",
-    "https://seekingalpha.com/api/v3/news/rss?limit=30",
-    "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNR4n1CU9MVWlnU0FtcGhHZ0pMVW1"
+    "https://seekingalpha.com/api/v3/news/rss?limit=50",
+    "https://news.google.com/rss/search?q=when:1h+(vix+OR+spx+OR+fed+OR+powell)&hl=en-US&gl=US&ceid=US:en"
 ];
 
-const secondarySources = [
-    "https://www.investing.com/rss/news_25.rss",
-    "https://www.investing.com/rss/news_285.rss",
-    "https://www.fxstreet.com/rss/news",
-    "https://www.kitco.com/rss/economic_calendar.rss",
-    "https://www.kitco.com/rss/news.rss"
-];
-
-const backupSources = [
-    "https://news.google.com/rss/search?q=nasdaq&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=stock+market&hl=en-US&gl=US&ceid=US:en"
-];
-
-// === MOTS-CLÉS ===
-const keywords = {
-    "-6": [/vix.?spike/i, /contagion/i, /circuit.?breaker/i, /margin.?call/i],
-    "-5": [/crash/i, /plunge/i, /meltdown/i, /liquidation.?cascade/i, /systemic/i],
-    "-4": [/hard.?landing/i, /default/i, /credit.?event/i, /bank.?run/i],
-    "-3": [/war/i, /missile/i, /strike/i, /attack.?on/i, /nuclear/i, /government.?shutdown/i, /hawkish.?surprise/i],
-    "-2": [/hot.?cpi/i, /hot.?ppi/i, /rate.?hike/i, /hawkish.?powell/i],
-    "-1": [/volatility/i, /uncertainty/i, /risk-?off/i, /safe.?haven/i],
-
-    "+1": [/beat/i, /strong/i, /resilient/i, /soft.?landing/i, /cooling.?inflation/i],
-    "+2": [/risk-?on/i, /vix.?crush/i, /rally/i, /bullish.?momentum/i, /fed.?pivot/i],
-    "+3": [/dovish.?surprise/i, /rate.?cut.?50/i, /qe/i, /stimulus/i],
-    "+5": [/melt-?up/i, /euphoria/i, /fomo/i, /vix.?termination/i]
-};
-
-// === Filtre marche global ===
-const marketFilter = /stock|market|dow|nasdaq|s&p|spx|fed|rate|inflation|yield|treasury|vix|volatility|earnings|cpi|ppi|fomc|powell|bond|10-?year/i;
-
-// === UTIL: fetch RSS via rss2json (CORS OK) ===
-async function fetchRss(url) {
-    const apiUrl = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(url);
+async function fetchRSS(url) {
     try {
-        const res = await fetch(apiUrl, { cache: "no-store" });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-        return data.items || [];
-    } catch (e) {
-        console.warn("RSS fail:", url, e.message);
-        return [];
-    }
+        const r = await fetch("https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(url), {cache:"no-store"});
+        if (!r.ok) return [];
+        const d = await r.json();
+        return d.items || [];
+    } catch { return []; }
 }
 
-// === FETCH NEWS ===
-let rollingScore = 0;
-const MAX_ITEMS = 60;
+async function run() {
+    let raw = 0, items = [];
 
-async function fetchNews() {
-    const allSources = [...primarySources, ...secondarySources, ...backupSources];
-    let newEntries = [];
-    let rawScore = 0;
-
-    for (const url of allSources) {
-        if (newEntries.length >= MAX_ITEMS) break;
-
-        const items = await fetchRss(url);
-        for (const item of items) {
-            if (newEntries.length >= MAX_ITEMS) break;
-
-            const title = item.title || "";
-            const desc = (item.description || "").replace(/<[^>]+>/g, " ");
+    for (const url of sources) {
+        const feed = await fetchRSS(url);
+        for (const i of feed) {
+            const title = (i.title||"").trim();
+            const desc = (i.description||"").replace(/<[^>]+>/g," ").trim();
             const full = (title + " " + desc).toLowerCase();
-
             if (!marketFilter.test(full)) continue;
 
             let score = 0;
-            for (const [weight, patterns] of Object.entries(keywords)) {
-                for (const p of patterns) {
-                    if (p.test(full)) score += parseInt(weight, 10);
-                }
+            for (const [w, regs] of Object.entries(keywords)) {
+                for (const r of regs) if (r.test(full)) score += parseInt(w);
             }
+            if (/breaking|urgent|flash|live/i.test(title)) score += score < 0 ? -4 : +4;
 
-            if (/breaking|urgent|flash/i.test(title)) {
-                score += score < 0 ? -3 : 2;
-            }
+            // DECAY TEMPOREL – très important
+            const ageMin = (Date.now() - Date.parse(i.pubDate || Date.now())) / 60000;
+            const decay = ageMin < 20 ? 1 : ageMin < 60 ? 0.7 : ageMin < 180 ? 0.3 : 0.1;
+            raw += score * decay;
 
-            const pubDate = item.pubDate || item.pubdate || "";
-            const ts = pubDate ? Date.parse(pubDate) || Date.now() : Date.now();
-
-            rawScore += score;
-
-            newEntries.push({
-                title,
-                score,
-                pubDate,
-                timestamp: ts
-            });
+            items.push({title, score: score*decay, pubDate: i.pubDate});
         }
     }
 
-    rollingScore = rollingScore === 0
-        ? rawScore
-        : rollingScore * 0.6 + rawScore * 0.4;
+    // Lissage plus réactif + boost pré-open US (14h-16h CET)
+    const hour = new Date().getHours();
+    const preOpenBoost = (hour >= 14 && hour < 16) ? 1.4 : 1.0;
+    rollingScore = rollingScore === 0 ? raw : rollingScore * 0.7 + raw * 0.3;
+    rollingScore *= preOpenBoost;
 
-    updateUI(newEntries, rollingScore);
-}
-
-// === UI ===
-function updateUI(fetchedNews, score) {
-    let stored = loadStoredNews();
-
-    // Ajout sans doublons (par titre)
-    for (const n of fetchedNews) {
-        if (!stored.find(s => s.title === n.title)) {
-            stored.push(n);
-        }
+    // Stockage + affichage
+    let stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    for (const n of items) {
+        if (!stored.some(s => s.title === n.title)) stored.push(n);
     }
+    stored.sort((a,b) => (b.pubDate ? new Date(b.pubDate) : 0) - (a.pubDate ? new Date(a.pubDate) : 0));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored.slice(0,300)));
 
-    saveStoredNews(stored);
-
-    // Tri du plus récent au plus ancien
-    stored.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-
-    const list = stored.slice(0, 40);
-
-    const html = list.map(n => {
-        const d = n.pubDate ? new Date(n.pubDate) : new Date(n.timestamp || Date.now());
-        const timeStr = isNaN(d.getTime())
-            ? "??:??:??"
-            : d.toLocaleTimeString("fr-FR", { hour12: false });
-
-        const colorEmoji =
-            n.score <= -3 ? "🔴" :
-            n.score <= -1 ? "🟠" :
-            n.score >= 3  ? "🟢" :
-            n.score >= 1  ? "🟡" : "⚪";
-
-        return `
-            <div class="news-item">
-                <span>${colorEmoji}</span>
-                <b>[${timeStr}]</b> ${n.title}
-            </div>
-        `;
+    newsContainer.innerHTML = stored.slice(0,40).map(n => {
+        const d = new Date(n.pubDate || Date.now());
+        const t = d.toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"});
+        const e = n.score <= -6 ? "red_circle" : n.score <= -3 ? "orange_circle" : n.score >= 6 ? "green_circle" : n.score >= 3 ? "yellow_circle" : "white_circle";
+        return `<div class="news-item"><span>${e}</span><b>[${t}]</b> ${n.title}</div>`;
     }).join("");
 
-    newsContainer.innerHTML = html;
+    // SEUILS CALIBRÉS 2025 (beaucoup plus réactifs)
+    if (rollingScore <= -14) { set("extreme-red", "VXX LONG GROS — CRASH"); beep(200,5); }
+    else if (rollingScore <= -8)  { set("red", "VXX LONG — Risk-Off"); beep(300,3); }
+    else if (rollingScore >= 14)  { set("extreme-green", "SHORT VXX MAX — MELT-UP"); beep(900,5); }
+    else if (rollingScore >= 8)   { set("green", "Risk-On fort — Short VIX"); }
+    else if (rollingScore >= 3)   { set("green", "Risk-On léger"); }
+    else if (rollingScore <= -3)  { set("red", "Risk-Off léger"); }
+    else set("neutral", "CHOPPY — attendre");
 
-    // Sentiment global
-    if (score <= -12) setSentiment("extreme-red", "VXX LONG AGRESSIF — SIZE GROS");
-    else if (score <= -6) setSentiment("red", "VXX LONG — RISK-OFF CLAIR");
-    else if (score >= 12) setSentiment("extreme-green", "SHORT VXX AGRESSIF — MELT-UP");
-    else if (score >= 6) setSentiment("green", "SHORT VXX OU FLAT — RISK-ON");
-    else setSentiment("neutral", "CHOPPY — Attendre ou scalp micro");
+    function set(c,m) {
+        circle.className = `circle ${c}`;
+        sentimentText.textContent = m;
+        sentimentText.className = `sentiment-${c.split("-")[0]}`;
+    }
 }
 
-function setSentiment(color, message) {
-    circle.className = `circle ${color}`;
-    sentimentText.textContent = message;
-    sentimentText.className = `sentiment-${color.split("-")[0]}`;
+function beep(f,r) {
+    try {
+        const a = new (window.AudioContext || window.webkitAudioContext)();
+        const o = a.createOscillator(), g = a.createGain();
+        o.connect(g); g.connect(a.destination);
+        o.frequency.value = f; g.gain.value = 0.2;
+        o.start(); o.stop(a.currentTime + 0.25);
+        for(let i=0;i<r;i++) setTimeout(()=>navigator.vibrate?.([200,100,200]),i*400);
+    } catch(e) {}
 }
 
-// === Lancement ===
-fetchNews();
-setInterval(fetchNews, 25000);
+run();
+setInterval(run, 24000); // toutes les 24s → ultra-réactif
